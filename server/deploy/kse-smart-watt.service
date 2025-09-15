@@ -1,0 +1,17 @@
+[Unit]
+Description=KSE Smart Watt Go Server
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+EnvironmentFile=/etc/kse-smart-watt/kse-smart-watt.env
+WorkingDirectory=/opt/kse-smart-watt
+ExecStart=/opt/kse-smart-watt/kse-smart-watt
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
