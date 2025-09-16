@@ -112,7 +112,7 @@ export default function Upload() {
         <div className="w-64 h-10 rounded-full bg-white flex items-center justify-center gap-3">
           <img src="/logo.webp" alt="logo" className="w-8 h-8 rounded" />
           <h1 className="font-poppins text-xl italic font-semibold text-transparent bg-clip-text bg-gradient-to-l from-black to-neutral-400 w-fit">
-            Leksanawara
+            KSE SMART WATT 
           </h1>
         </div>
         <TooltipProvider>
