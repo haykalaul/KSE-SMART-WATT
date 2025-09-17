@@ -31,10 +31,12 @@ func UserRoutes(version *gin.RouterGroup, db *gorm.DB, redis *redis.Client) {
 		auth.GET("callback/google", User_handler.CallbackGoogle)
 	}
 
-	version.Use(middleware.AuthMiddleware())
-	version.GET("users", User_handler.GetAllUsers)
-	version.GET("users/:id", User_handler.GetUserByID)
-	version.PUT("users/:id", User_handler.UpdateUser)
-	version.DELETE("users/:id", User_handler.DeleteUser)
-	version.PUT("users/set-premium", User_handler.SetPremium)
+	// Protect only user management routes with auth middleware
+	protected := version.Group("/")
+	protected.Use(middleware.AuthMiddleware())
+	protected.GET("users", User_handler.GetAllUsers)
+	protected.GET("users/:id", User_handler.GetUserByID)
+	protected.PUT("users/:id", User_handler.UpdateUser)
+	protected.DELETE("users/:id", User_handler.DeleteUser)
+	protected.PUT("users/set-premium", User_handler.SetPremium)
 }

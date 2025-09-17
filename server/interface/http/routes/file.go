@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"os"
 	"smart-home-energy-management-server/interface/http/handler"
 	"smart-home-energy-management-server/internal/repository"
 	"smart-home-energy-management-server/internal/service"
@@ -24,6 +25,10 @@ func FileRoutes(version *gin.RouterGroup, psql *gorm.DB, redis *redis.Client) {
 
 	version.POST("/upload", fileHandler.UploadFileCSV)
 	version.GET("/table", fileHandler.GetTable)
+	// Dev-only: raw view of redis value for debugging.
+	if os.Getenv("MODE") == "development" {
+		version.GET("/table/raw", fileHandler.GetRawTable)
+	}
 	version.POST("/chat", fileHandler.Chat)
 	version.POST("/tapas-chat", fileHandler.TapasChat)
 	version.GET("/appliance", fileHandler.GetAppliance)

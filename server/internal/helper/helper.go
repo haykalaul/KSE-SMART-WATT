@@ -4,6 +4,8 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"net/smtp"
@@ -11,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 	"unicode"
 
@@ -46,29 +49,41 @@ func ReadCSV(fileURL string) (map[string][]string, error) {
 
 	// Membaca CSV langsung dari response body
 	reader := csv.NewReader(response.Body)
-
-	// Membaca semua baris dari CSV
-	records, err := reader.ReadAll()
+	// Read header first
+	header, err := reader.Read()
 	if err != nil {
-		return nil, fmt.Errorf("error reading CSV: %w", err)
+		return nil, fmt.Errorf("error reading CSV header: %w", err)
 	}
 
-	// Membuat map untuk menyimpan data CSV
+	if len(header) == 0 {
+		return nil, errors.New("csv header is empty")
+	}
+
 	result := make(map[string][]string)
-
-	// Ambil header dari baris pertama
-	header := records[0]
-
-	// Inisialisasi map berdasarkan header
-	for _, column := range header {
-		result[column] = []string{}
+	for _, col := range header {
+		result[col] = []string{}
 	}
 
-	// Memproses setiap baris data
-	for _, record := range records[1:] { // Lewati header
-		for i, value := range record {
-			key := header[i]
-			result[key] = append(result[key], value)
+	// Read remaining records one by one to be defensive against malformed rows
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			// Log and continue to try to parse other rows
+			log.Printf("warning: error reading csv row: %v", err)
+			continue
+		}
+
+		for i := 0; i < len(header); i++ {
+			var val string
+			if i < len(record) {
+				val = record[i]
+			} else {
+				val = ""
+			}
+			result[header[i]] = append(result[header[i]], val)
 		}
 	}
 
@@ -91,72 +106,171 @@ func ParseCSVtoSliceOfStruct(fileURL string) ([]entity.ApplianceRequest, error) 
 	// Membaca CSV langsung dari response body
 	reader := csv.NewReader(response.Body)
 	// Membaca header
-	_, err = reader.Read()
+	header, err := reader.Read()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error reading csv header: %w", err)
 	}
 
-	// Menyimpan daftar appliance dan durasi untuk setiap device
+	loweredHeader := make([]string, len(header))
+	for i, h := range header {
+		loweredHeader[i] = strings.ToLower(strings.TrimSpace(h))
+	}
+
+	// Determine schema: simplified or detailed
+	// Simplified columns we expect: appliance (or device/name) and energy (or energy_consumption)
+	idxAppliance := -1
+	idxEnergy := -1
+	idxPower := -1
+	idxDuration := -1
+	idxCost := -1
+	idxType := -1
+	idxLocation := -1
+	idxStatus := -1
+	idxConnectivity := -1
+
+	for i, h := range loweredHeader {
+		switch {
+		case strings.Contains(h, "appliance") || strings.Contains(h, "device") || strings.Contains(h, "name"):
+			if idxAppliance == -1 {
+				idxAppliance = i
+			}
+		case strings.Contains(h, "energy") || strings.Contains(h, "energy_consumption") || strings.Contains(h, "kwh"):
+			if idxEnergy == -1 {
+				idxEnergy = i
+			}
+		case strings.Contains(h, "power"):
+			if idxPower == -1 {
+				idxPower = i
+			}
+		case strings.Contains(h, "duration") || strings.Contains(h, "usage"):
+			if idxDuration == -1 {
+				idxDuration = i
+			}
+		case strings.Contains(h, "cost") || strings.Contains(h, "price"):
+			if idxCost == -1 {
+				idxCost = i
+			}
+		case strings.Contains(h, "type"):
+			if idxType == -1 {
+				idxType = i
+			}
+		case strings.Contains(h, "location") || strings.Contains(h, "room"):
+			if idxLocation == -1 {
+				idxLocation = i
+			}
+		case strings.Contains(h, "status"):
+			if idxStatus == -1 {
+				idxStatus = i
+			}
+		case strings.Contains(h, "connect"):
+			if idxConnectivity == -1 {
+				idxConnectivity = i
+			}
+		}
+	}
+
 	var appliances []entity.ApplianceRequest
-	deviceDurations := make(map[string][]float64) // Menyimpan list durasi untuk setiap device name
+	deviceDurations := make(map[string][]float64)
 	seenNames := make(map[string]bool)
 
-	// Membaca setiap baris dalam file CSV
 	for {
 		record, err := reader.Read()
-		if err != nil {
+		if err == io.EOF {
 			break
 		}
-		// Ambil data dari baris CSV
-		deviceName := record[1]
-
-		power, err := strconv.Atoi(record[4])
 		if err != nil {
-			continue
-		}
-		energy, err := strconv.ParseFloat(record[8], 64)
-		if err != nil {
-			continue
-		}
-		duration, err := strconv.ParseFloat(record[7], 64) // Duration (Hours)
-		if err != nil {
-			continue
-		}
-		cost, err := strconv.ParseFloat(record[9], 64)
-		if err != nil {
+			log.Printf("warning: skipping csv row due to read error: %v", err)
 			continue
 		}
 
-		// Jika nama appliance sudah ada, lewati
+		// retrieve values safely by index
+		get := func(idx int) string {
+			if idx >= 0 && idx < len(record) {
+				return strings.TrimSpace(record[idx])
+			}
+			return ""
+		}
+
+		deviceName := get(idxAppliance)
+		if deviceName == "" {
+			// fallback: if there is a Date,Time,Appliance simple schema, appliance may be at index 2
+			if len(record) > 2 {
+				deviceName = strings.TrimSpace(record[2])
+			}
+		}
+
+		// energy
+		var energy float64
+		if idxEnergy >= 0 {
+			energy, err = strconv.ParseFloat(get(idxEnergy), 64)
+			if err != nil {
+				log.Printf("warning: invalid energy for device %s: %v", deviceName, err)
+				continue
+			}
+		} else if len(record) > 3 {
+			// if simple schema: Date,Time,Appliance,Energy_Consumption,...
+			energy, err = strconv.ParseFloat(strings.TrimSpace(record[3]), 64)
+			if err != nil {
+				log.Printf("warning: invalid energy (fallback) for device %s: %v", deviceName, err)
+				continue
+			}
+		}
+
+		// power
+		var powerInt int
+		if idxPower >= 0 {
+			powerInt, _ = strconv.Atoi(get(idxPower))
+		}
+
+		// duration
+		var duration float64
+		if idxDuration >= 0 {
+			duration, _ = strconv.ParseFloat(get(idxDuration), 64)
+		}
+
+		// cost
+		var cost float64
+		if idxCost >= 0 {
+			cost, _ = strconv.ParseFloat(get(idxCost), 64)
+		}
+
+		// other fields
+		typ := get(idxType)
+		loc := get(idxLocation)
+		status := get(idxStatus)
+		conn := get(idxConnectivity)
+
+		// If appliance name still empty, skip
+		if deviceName == "" {
+			log.Printf("warning: skipping row with empty appliance name: %v", record)
+			continue
+		}
+
+		// For duration fallback set to 0 if missing
+		// priority: example rule power > 500
+		priority := powerInt > 500
+
+		// If appliance already seen, append duration/energy
 		if seenNames[deviceName] {
-			// Update list durasi untuk appliance yang sama
 			deviceDurations[deviceName] = append(deviceDurations[deviceName], duration)
 			continue
 		}
 
-		// Tandai nama appliance sudah ada
 		seenNames[deviceName] = true
 
-		// Tentukan apakah appliance memiliki prioritas (misalnya berdasarkan power > 500W)
-		priority := power > 500
-
-		// Tambahkan appliance baru ke slice
 		appliance := entity.ApplianceRequest{
 			Name:         deviceName,
-			Type:         record[2],
-			Location:     record[3],
-			Power:        power,
+			Type:         typ,
+			Location:     loc,
+			Power:        powerInt,
 			Energy:       energy,
 			Cost:         cost,
-			Status:       record[10],
-			Connectivity: record[11],
+			Status:       status,
+			Connectivity: conn,
 			Priority:     priority,
 		}
 
-		// Hitung rata-rata durasi untuk device yang pertama kali ditemukan
 		deviceDurations[deviceName] = append(deviceDurations[deviceName], duration)
-
-		// Tambahkan appliance ke slice
 		appliances = append(appliances, appliance)
 	}
 
@@ -165,7 +279,6 @@ func ParseCSVtoSliceOfStruct(fileURL string) ([]entity.ApplianceRequest, error) 
 		deviceName := appliances[i].Name
 		durations := deviceDurations[deviceName]
 		if len(durations) > 0 {
-			// Hitung rata-rata durasi untuk appliance yang sesuai
 			var totalDuration float64
 			for _, d := range durations {
 				totalDuration += d
@@ -410,18 +523,28 @@ func GenerateToken(username string, email string, premium bool) (string, error) 
 
 func VerifyToken(jwtToken string) (interface{}, error) {
 	secretKey := os.Getenv("JWT_SECRET")
-	token, _ := jwt.Parse(jwtToken, func(t *jwt.Token) (interface{}, error) {
+
+	token, err := jwt.Parse(jwtToken, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errors.New("sign in to preceed")
+			return nil, errors.New("unexpected signing method")
 		}
 		return []byte(secretKey), nil
 	})
 
-	if _, ok := token.Claims.(jwt.MapClaims); !ok && !token.Valid {
-		return nil, errors.New("sign in to preceed")
+	if err != nil {
+		return nil, err
 	}
 
-	return token.Claims.(jwt.MapClaims), nil
+	if token == nil || !token.Valid {
+		return nil, errors.New("invalid token")
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, errors.New("invalid token claims")
+	}
+
+	return claims, nil
 }
 
 func ComparePass(hashPassword, reqPassword string) bool {

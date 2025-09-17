@@ -52,6 +52,20 @@ export default function Upload() {
 
     if (files.length === 0) return;
 
+    // Client-side CSV validation before uploading
+    try {
+      const text = await files[0].text();
+      const validation = validateCSV(text);
+      if (!validation.ok) {
+        alert("CSV validation failed: " + validation.message);
+        return;
+      }
+    } catch (err) {
+      console.error("Error reading file for validation:", err);
+      alert("Unable to read file for validation");
+      return;
+    }
+
     const formData = new FormData();
     formData.append("file", files[0]); // Mengambil file pertama dari array
     formData.append("upload_preset", "appliances_csv"); // Ganti dengan nama preset Anda
@@ -87,6 +101,55 @@ export default function Upload() {
     } catch (error) {
       console.error("Error uploading file:", error);
     }
+  };
+
+  // Validate CSV header and columns
+  const validateCSV = (text: string): { ok: boolean; message?: string } => {
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+    if (lines.length === 0) return { ok: false, message: "file is empty" };
+
+    const headerLine = lines[0];
+    // split on commas not inside quotes
+    const parts = headerLine
+      .split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/)
+      .map((p) => p.replace(/^"|"$/g, "").trim());
+    // Accept two schemas:
+    // 1) Simplified schema: includes 'appliance' and 'energy' (or 'energy_consumption')
+    // 2) Original detailed schema (>= 12 columns and includes name/device, power, duration, energy, cost)
+
+    const lowered = parts.map((p) => p.toLowerCase());
+
+    // Simplified check
+    const hasAppliance = lowered.some((h) => h.includes("appliance") || h.includes("device") || h.includes("name"));
+    const hasEnergy = lowered.some((h) => h.includes("energy") || h.includes("energy_consumption") || h.includes("kwh"));
+    if (hasAppliance && hasEnergy) {
+      return { ok: true };
+    }
+
+    // Fallback to detailed schema checks
+    if (parts.length >= 12) {
+      const missing: string[] = [];
+      const checks: { name: string; keywords: string[] }[] = [
+        { name: "name/device", keywords: ["name", "device"] },
+        { name: "power", keywords: ["power"] },
+        { name: "duration/usage", keywords: ["duration", "usage"] },
+        { name: "energy", keywords: ["energy", "kwh"] },
+        { name: "cost", keywords: ["cost", "price"] },
+      ];
+
+      for (const c of checks) {
+        const ok = c.keywords.some((k) => lowered.some((h) => h.includes(k)));
+        if (!ok) missing.push(c.name);
+      }
+
+      if (missing.length > 0) {
+        return { ok: false, message: `missing expected columns: ${missing.join(", ")}` };
+      }
+
+      return { ok: true };
+    }
+
+    return { ok: false, message: `unrecognized csv header with ${parts.length} columns` };
   };
 
   return (
