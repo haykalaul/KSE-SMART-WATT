@@ -547,6 +547,30 @@ func VerifyToken(jwtToken string) (interface{}, error) {
 	return claims, nil
 }
 
+// SafeVerifyToken calls VerifyToken and recovers from any panic, returning an error instead.
+func SafeVerifyToken(jwtToken string) (data interface{}, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic during token verification: %v", r)
+			data = nil
+		}
+	}()
+
+	return VerifyToken(jwtToken)
+}
+
+// redactToken returns a partially redacted token for safe logging.
+func redactToken(t string) string {
+	if t == "" {
+		return "(empty)"
+	}
+	// Keep first 6 and last 4 chars; hide the rest
+	if len(t) <= 12 {
+		return "REDACTED"
+	}
+	return t[:6] + "..." + t[len(t)-4:]
+}
+
 func ComparePass(hashPassword, reqPassword string) bool {
 	hash, pass := []byte(hashPassword), []byte(reqPassword)
 
