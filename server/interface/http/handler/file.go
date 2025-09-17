@@ -75,7 +75,14 @@ func (h *fileHandler) UploadFileCSV(c *gin.Context) {
 	var mu sync.Mutex
 
 	// Truncate table appliances
-	h.applianceService.TruncateAppliances()
+	if err := h.applianceService.TruncateAppliances(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status":     false,
+			"statusCode": 500,
+			"message":    "failed truncate appliances: " + err.Error(),
+		})
+		return
+	}
 	for i := 0; i < len(appliances); i++ {
 		// Goroutine untuk insert data ke database
 		wg.Add(1)
@@ -97,6 +104,15 @@ func (h *fileHandler) UploadFileCSV(c *gin.Context) {
 			"status":     false,
 			"statusCode": 500,
 			"message":    errors,
+		})
+		return
+	}
+
+	if len(appliances) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status":     false,
+			"statusCode": 400,
+			"message":    "no appliances parsed from csv",
 		})
 		return
 	}
@@ -147,6 +163,25 @@ func (h *fileHandler) GetTable(c *gin.Context) {
 		"statusCode": 200,
 		"message":    "Get table success",
 		"data":       table,
+	})
+}
+
+func (h *fileHandler) GetRawTable(c *gin.Context) {
+	raw, err := h.fileService.GetRawTable()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status":     false,
+			"statusCode": 500,
+			"message":    err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":     true,
+		"statusCode": 200,
+		"message":    "Get raw table success",
+		"data":       raw,
 	})
 }
 
